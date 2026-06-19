@@ -60,7 +60,7 @@ jobs:
           # Audio driver for screen recording audio
           choco install vb-cable -y --no-progress --ignore-checksums
 
-          # Core apps (Discord, OBS, Captura removed)
+          # Core apps
           choco install winrar -y --no-progress
           choco install googlechrome -y --no-progress --ignore-checksums
           choco install brave -y --no-progress
@@ -80,7 +80,7 @@ jobs:
           $BraveLnk.TargetPath = "C:\BraveSoftware\Brave-Browser\Application\brave.exe"
           $BraveLnk.Save()
 
-          # Chrome Shortcut (default install path)
+          # Chrome Shortcut
           $ChromeLnk = $WshShell.CreateShortcut("C:\Users\Public\Desktop\Google Chrome.lnk")
           $ChromeLnk.TargetPath = "C:\Program Files\Google\Chrome\Application\chrome.exe"
           $ChromeLnk.Save()
@@ -99,24 +99,35 @@ jobs:
               Write-Error "SSH client not found. Please install OpenSSH Client."
               exit 1
           }
-          
-          # Start Pinggy tunnel in background
+
+          # Correct Pinggy command: -N (no remote cmd), -T (no pseudo-terminal)
           $sshArgs = @(
               "-o", "StrictHostKeyChecking=no",
               "-o", "ServerAliveInterval=30",
               "-p", "443",
+              "-N",
+              "-T",
               "-R0:localhost:3389",
               "a.pinggy.io"
           )
-          Start-Process -FilePath "ssh" -ArgumentList $sshArgs -NoNewWindow -PassThru -RedirectStandardOutput "pinggy_output.txt"
-          
+
+          # Start SSH and capture both stdout & stderr
+          $process = Start-Process -FilePath "ssh" `
+              -ArgumentList $sshArgs `
+              -NoNewWindow `
+              -PassThru `
+              -RedirectStandardOutput "pinggy_stdout.txt" `
+              -RedirectStandardError "pinggy_stderr.txt"
+
           Write-Host "Pinggy tunnel started. Waiting for address..."
+
+          # Wait for address in stderr (where Pinggy prints the URL)
           $address = $null
           $i = 0
-          while ($i -lt 300) { # Wait up to 10 minutes
-              if (Test-Path "pinggy_output.txt") {
-                  $content = Get-Content "pinggy_output.txt" -Raw
-                  if ($content -match "tcp://([^\s]+\.pinggy\.link:\d+)") {
+          while ($i -lt 300) {  # up to 10 minutes
+              if (Test-Path "pinggy_stderr.txt") {
+                  $errContent = Get-Content "pinggy_stderr.txt" -Raw
+                  if ($errContent -match "tcp://([^\s]+\.pinggy\.link:\d+)") {
                       $address = $matches[1]
                       break
                   }
@@ -124,19 +135,28 @@ jobs:
               Start-Sleep -Seconds 2
               $i++
           }
-          
+
           if (-not $address) {
+              # Print debug info before failing
+              if (Test-Path "pinggy_stderr.txt") {
+                  Write-Host "--- pinggy_stderr.txt contents ---"
+                  Get-Content "pinggy_stderr.txt" | ForEach-Object { Write-Host $_ }
+              }
+              if (Test-Path "pinggy_stdout.txt") {
+                  Write-Host "--- pinggy_stdout.txt contents ---"
+                  Get-Content "pinggy_stdout.txt" | ForEach-Object { Write-Host $_ }
+              }
               Write-Error "Failed to get Pinggy tunnel address."
               exit 1
           }
-          
+
           # Show connection details
           Write-Host "`n=== RDP ACCESS ==="
           Write-Host "Address: $address"
           Write-Host "Username: RDP"
           Write-Host "Password: $(echo $env:RDP_CREDS)"
           Write-Host "==================`n"
-          
+
           # Keep runner alive
           while ($true) {
               Write-Host "[$(Get-Date)] RDP Active - Pinggy tunnel is running"

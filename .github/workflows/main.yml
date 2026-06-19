@@ -27,7 +27,7 @@ jobs:
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
                              -Name "SecurityLayer" -Value 0 -Force
 
-          # Firewall rule for RDP (clean old ones first)
+          # Firewall rule for RDP
           netsh advfirewall firewall delete rule name="RDP-Pinggy"
           netsh advfirewall firewall add rule name="RDP-Pinggy" `
             dir=in action=allow protocol=TCP localport=3389
@@ -94,41 +94,30 @@ jobs:
 
       - name: Start Pinggy Tunnel & Maintain Connection
         run: |
-          # Ensure SSH client is available
-          if (!(Get-Command ssh -ErrorAction SilentlyContinue)) {
-              Write-Error "SSH client not found. Please install OpenSSH Client."
-              exit 1
+          # Download the official Pinggy client if not present
+          if (!(Test-Path "pinggy.exe")) {
+              Write-Host "Downloading Pinggy client..."
+              Invoke-WebRequest -Uri "https://github.com/pinggyio/pinggy/releases/latest/download/pinggy.exe" -OutFile "pinggy.exe"
           }
 
-          # Correct Pinggy command: -N (no remote cmd), -T (no pseudo-terminal)
-          $sshArgs = @(
-              "-o", "StrictHostKeyChecking=no",
-              "-o", "ServerAliveInterval=30",
-              "-p", "443",
-              "-N",
-              "-T",
-              "-R0:localhost:3389",
-              "a.pinggy.io"
-          )
-
-          # Start SSH and capture both stdout & stderr
-          $process = Start-Process -FilePath "ssh" `
-              -ArgumentList $sshArgs `
+          # Start the TCP tunnel to localhost:3389
+          Write-Host "Starting Pinggy tunnel..."
+          $process = Start-Process -FilePath ".\pinggy.exe" `
+              -ArgumentList "-p 443 -R0:localhost:3389 tcp@a.pinggy.io" `
               -NoNewWindow `
               -PassThru `
               -RedirectStandardOutput "pinggy_stdout.txt" `
               -RedirectStandardError "pinggy_stderr.txt"
 
-          Write-Host "Pinggy tunnel started. Waiting for address..."
-
-          # Wait for address in stderr (where Pinggy prints the URL)
+          # Wait for the tunnel URL to appear in stdout
           $address = $null
           $i = 0
-          while ($i -lt 300) {  # up to 10 minutes
-              if (Test-Path "pinggy_stderr.txt") {
-                  $errContent = Get-Content "pinggy_stderr.txt" -Raw
-                  if ($errContent -match "tcp://([^\s]+\.pinggy\.link:\d+)") {
-                      $address = $matches[1]
+          while ($i -lt 150) {  # up to 5 minutes
+              if (Test-Path "pinggy_stdout.txt") {
+                  $outContent = Get-Content "pinggy_stdout.txt" -Raw
+                  # Match the line: Tunnel URL: tcp://xyz.pinggy.link:12345
+                  if ($outContent -match "Tunnel URL:\s*(tcp://[^\s]+)") {
+                      $address = $matches[1].Trim()
                       break
                   }
               }
@@ -137,27 +126,22 @@ jobs:
           }
 
           if (-not $address) {
-              # Print debug info before failing
+              Write-Host "Tunnel URL not found in stdout. Checking stderr for debug info..."
               if (Test-Path "pinggy_stderr.txt") {
-                  Write-Host "--- pinggy_stderr.txt contents ---"
                   Get-Content "pinggy_stderr.txt" | ForEach-Object { Write-Host $_ }
               }
-              if (Test-Path "pinggy_stdout.txt") {
-                  Write-Host "--- pinggy_stdout.txt contents ---"
-                  Get-Content "pinggy_stdout.txt" | ForEach-Object { Write-Host $_ }
-              }
-              Write-Error "Failed to get Pinggy tunnel address."
+              Write-Error "Failed to obtain Pinggy tunnel address."
               exit 1
           }
 
-          # Show connection details
+          # Display connection details
           Write-Host "`n=== RDP ACCESS ==="
           Write-Host "Address: $address"
           Write-Host "Username: RDP"
           Write-Host "Password: $(echo $env:RDP_CREDS)"
           Write-Host "==================`n"
 
-          # Keep runner alive
+          # Keep the runner alive
           while ($true) {
               Write-Host "[$(Get-Date)] RDP Active - Pinggy tunnel is running"
               Start-Sleep -Seconds 300

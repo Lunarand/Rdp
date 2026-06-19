@@ -94,10 +94,15 @@ jobs:
 
       - name: Start Pinggy Tunnel & Maintain Connection
         run: |
-          # Download the official Pinggy client if not present
+          # Download the official Pinggy client (correct asset name)
           if (!(Test-Path "pinggy.exe")) {
               Write-Host "Downloading Pinggy client..."
-              Invoke-WebRequest -Uri "https://github.com/pinggyio/pinggy/releases/latest/download/pinggy.exe" -OutFile "pinggy.exe"
+              $url = "https://github.com/pinggyio/pinggy/releases/latest/download/pinggy-windows-amd64.exe"
+              Invoke-WebRequest -Uri $url -OutFile "pinggy.exe" -UseBasicParsing
+              if (!(Test-Path "pinggy.exe")) {
+                  Write-Error "Download failed - pinggy.exe not found."
+                  exit 1
+              }
           }
 
           # Start the TCP tunnel to localhost:3389
@@ -115,7 +120,7 @@ jobs:
           while ($i -lt 150) {  # up to 5 minutes
               if (Test-Path "pinggy_stdout.txt") {
                   $outContent = Get-Content "pinggy_stdout.txt" -Raw
-                  # Match the line: Tunnel URL: tcp://xyz.pinggy.link:12345
+                  # Match: Tunnel URL: tcp://xyz.pinggy.link:port
                   if ($outContent -match "Tunnel URL:\s*(tcp://[^\s]+)") {
                       $address = $matches[1].Trim()
                       break
@@ -126,7 +131,7 @@ jobs:
           }
 
           if (-not $address) {
-              Write-Host "Tunnel URL not found in stdout. Checking stderr for debug info..."
+              Write-Host "Tunnel URL not found in stdout. Showing stderr for debug:"
               if (Test-Path "pinggy_stderr.txt") {
                   Get-Content "pinggy_stderr.txt" | ForEach-Object { Write-Host $_ }
               }

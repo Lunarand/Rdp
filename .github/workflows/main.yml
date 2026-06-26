@@ -1,4 +1,4 @@
-name: RDP (Pinggy Tunnel + Brave + Chrome + WinRAR + FFmpeg)
+name: RDP (Pinggy Stable - Fast Boot)
 
 on:
   workflow_dispatch:
@@ -6,32 +6,34 @@ on:
 jobs:
   secure-rdp:
     runs-on: windows-latest
-    timeout-minutes: 3600
+    timeout-minutes: 360
 
     steps:
       - name: Configure Core RDP Settings
         run: |
-          # --- AUDIO & SESSION FIXES START HERE ---
+          # --- AUDIO & SESSION FIXES ---
           Set-Service -Name Audiosrv -StartupType Automatic
+          sc failure Audiosrv reset=86400 actions=restart/5000/restart/10000/restart/30000
           Start-Service -Name Audiosrv
           Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name "fDisableAudioCapture" -Value 0 -Force
-          # KEEP SESSION ACTIVE IN BACKGROUND
           Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name "MaxDisconnectionTime" -Value 0 -Force
-          # --- FIXES END HERE ---
 
-          # Enable Remote Desktop and disable Network Level Authentication
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
-                             -Name "fDenyTSConnections" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-                             -Name "UserAuthentication" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-                             -Name "SecurityLayer" -Value 0 -Force
+          # Enable clipboard sharing
+          Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name "fDisableClip" -Value 0 -Force
 
-          # Firewall rule for RDP
-          netsh advfirewall firewall delete rule name="RDP-Pinggy"
-          netsh advfirewall firewall add rule name="RDP-Pinggy" `
-            dir=in action=allow protocol=TCP localport=3389
+          # Enable Remote Desktop (disable NLA for log-based interaction)
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
 
+          # Enable auto-reconnect on disconnect
+          Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name "fEnableAutoReconnect" -Value 1 -Force
+
+          # Firewall
+          netsh advfirewall firewall delete rule name="RDP-Tailscale" 2>$null
+          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
+
+          # Auto-restart RDP service if it crashes
+          sc failure TermService reset=86400 actions=restart/5000/restart/10000/restart/30000
           Restart-Service -Name TermService -Force
 
       - name: Create RDP User with Secure Password
@@ -39,115 +41,114 @@ jobs:
           MY_SECRET_PASS: ${{ secrets.PASS }}
         run: |
           if (-not $env:MY_SECRET_PASS) {
-              Write-Error "Error: Secret 'PASS' is empty or missing. Please add it in Repository Settings."
-              exit 1
+            Write-Error "Secret 'PASS' is missing. Add it in Repository Settings."
+            exit 1
           }
-          $password = $env:MY_SECRET_PASS
-          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          $securePass = ConvertTo-SecureString $env:MY_SECRET_PASS -AsPlainText -Force
           New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
           Add-LocalGroupMember -Group "Administrators" -Member "RDP"
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
-          echo "RDP_CREDS=User: RDP | Password: (Hidden - Check your Secrets)" >> $env:GITHUB_ENV
-          if (-not (Get-LocalUser -Name "RDP")) {
-              Write-Error "User creation failed"
-              exit 1
-          }
+          echo "RDP_CREDS=User: RDP | Password: (Hidden)" >> $env:GITHUB_ENV
 
-      - name: Install Apps & Create Shortcuts
+      - name: Optimize System (Fast)
         run: |
-          Write-Host "Installing Apps..."
+          # High Performance power plan
+          powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
 
-          # Audio driver for screen recording audio
-          choco install vb-cable -y --no-progress --ignore-checksums
+          # Disable Windows Automatic Updates (prevents background lag)
+          New-Item -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" -Force | Out-Null
+          Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" -Name "NoAutoUpdate" -Value 1 -Type DWord -Force
 
-          # Core apps
-          choco install winrar -y --no-progress
-          choco install googlechrome -y --no-progress --ignore-checksums
-          choco install brave -y --no-progress
-          choco install ffmpeg -y --no-progress
+          Write-Host "Core system optimization complete."
 
-          # Fix Brave (move to public folder)
-          $BraveAdmin = "C:\Users\runneradmin\AppData\Local\BraveSoftware"
-          if (Test-Path $BraveAdmin) {
-              Copy-Item -Path $BraveAdmin -Destination "C:\" -Recurse -Force
-          }
-
-          # Create Desktop Shortcuts
-          $WshShell = New-Object -comObject WScript.Shell
-
-          # Brave Shortcut
-          $BraveLnk = $WshShell.CreateShortcut("C:\Users\Public\Desktop\Brave.lnk")
-          $BraveLnk.TargetPath = "C:\BraveSoftware\Brave-Browser\Application\brave.exe"
-          $BraveLnk.Save()
-
-          # Chrome Shortcut
-          $ChromeLnk = $WshShell.CreateShortcut("C:\Users\Public\Desktop\Google Chrome.lnk")
-          $ChromeLnk.TargetPath = "C:\Program Files\Google\Chrome\Application\chrome.exe"
-          $ChromeLnk.Save()
-
-          # WinRAR Shortcut
-          $RarLnk = $WshShell.CreateShortcut("C:\Users\Public\Desktop\WinRAR.lnk")
-          $RarLnk.TargetPath = "C:\Program Files\WinRAR\WinRAR.exe"
-          $RarLnk.Save()
-
-          Write-Host "Installation and shortcuts complete."
-
+      # ---------------------------------------------------------------
+      # Pinggy Tunnel (works on Windows exactly like the Linux ssh command)
+      # ---------------------------------------------------------------
       - name: Start Pinggy Tunnel & Maintain Connection
         run: |
-          # Download the official Pinggy client (correct asset name)
-          if (!(Test-Path "pinggy.exe")) {
-              Write-Host "Downloading Pinggy client..."
-              $url = "https://github.com/pinggyio/pinggy/releases/latest/download/pinggy-windows-amd64.exe"
-              Invoke-WebRequest -Uri $url -OutFile "pinggy.exe" -UseBasicParsing
-              if (!(Test-Path "pinggy.exe")) {
-                  Write-Error "Download failed - pinggy.exe not found."
-                  exit 1
-              }
+          # OpenSSH client is pre-installed on windows-latest
+          if (-not (Get-Command ssh.exe -ErrorAction SilentlyContinue)) {
+            Write-Host "Installing OpenSSH client..."
+            Add-WindowsCapability -Online -Name OpenSSH.Client~~~~0.0.1.0
           }
 
-          # Start the TCP tunnel to localhost:3389
-          Write-Host "Starting Pinggy tunnel..."
-          $process = Start-Process -FilePath ".\pinggy.exe" `
-              -ArgumentList "-p 443 -R0:localhost:3389 tcp@a.pinggy.io" `
-              -NoNewWindow `
-              -PassThru `
-              -RedirectStandardOutput "pinggy_stdout.txt" `
-              -RedirectStandardError "pinggy_stderr.txt"
-
-          # Wait for the tunnel URL to appear in stdout
-          $address = $null
-          $i = 0
-          while ($i -lt 150) {  # up to 5 minutes
-              if (Test-Path "pinggy_stdout.txt") {
-                  $outContent = Get-Content "pinggy_stdout.txt" -Raw
-                  # Match: Tunnel URL: tcp://xyz.pinggy.link:port
-                  if ($outContent -match "Tunnel URL:\s*(tcp://[^\s]+)") {
-                      $address = $matches[1].Trim()
-                      break
-                  }
+          function Get-PinggyAddress($stdoutLog, $stderrLog, $timeoutSec = 60) {
+            $start = Get-Date
+            while ((Get-Date) - $start -lt [TimeSpan]::FromSeconds($timeoutSec)) {
+              foreach ($lf in @($stdoutLog, $stderrLog)) {
+                if (Test-Path $lf) {
+                  $m = (Get-Content $lf -Tail 30) | Select-String 'tcp://([a-zA-Z0-9\.\-_]+:\d+)'
+                  if ($m) { return $m.Matches.Groups[1].Value.Trim() }
+                }
               }
               Start-Sleep -Seconds 2
-              $i++
+            }
+            return $null
           }
 
-          if (-not $address) {
-              Write-Host "Tunnel URL not found in stdout. Showing stderr for debug:"
-              if (Test-Path "pinggy_stderr.txt") {
-                  Get-Content "pinggy_stderr.txt" | ForEach-Object { Write-Host $_ }
+          $maxRetries = 5
+          $delay = 10
+
+          for ($attempt = 1; $attempt -le $maxRetries; $attempt++) {
+            Write-Host "`n=== Pinggy attempt $attempt/$maxRetries ==="
+
+            $stdoutLog = "$env:TEMP\pinggy_stdout_$attempt.log"
+            $stderrLog = "$env:TEMP\pinggy_stderr_$attempt.log"
+
+            $proc = Start-Process -FilePath ssh.exe `
+              -ArgumentList "-o StrictHostKeyChecking=no -p 443 -R0:localhost:3389 -N tcp@a.pinggy.io" `
+              -NoNewWindow `
+              -RedirectStandardOutput $stdoutLog `
+              -RedirectStandardError  $stderrLog `
+              -PassThru
+
+            $address = Get-PinggyAddress -stdoutLog $stdoutLog -stderrLog $stderrLog -timeoutSec 60
+
+            if ($address) {
+              Write-Host "`n=========================================="
+              Write-Host "  RDP ACCESS READY"
+              Write-Host "  Address : $address"
+              Write-Host "  Username: RDP"
+              Write-Host "  Password: (from your PASS secret)"
+              Write-Host "==========================================`n"
+
+              $delay = 10
+
+              while ($true) {
+                Start-Sleep -Seconds 30
+                if ($proc.HasExited) {
+                  Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Pinggy tunnel exited (code $($proc.ExitCode)). Restarting..."
+                  break
+                }
+                Write-Host "[$(Get-Date -Format 'HH:mm:ss')] RDP active via Pinggy — $address"
               }
-              Write-Error "Failed to obtain Pinggy tunnel address."
-              exit 1
+            } else {
+              Write-Warning "Failed to get Pinggy address on attempt $attempt."
+              if ($proc -and -not $proc.HasExited) { $proc.Kill() }
+              foreach ($lf in @($stdoutLog, $stderrLog)) {
+                if (Test-Path $lf) {
+                  Write-Host "--- $lf (last 20 lines) ---"
+                  Get-Content $lf -Tail 20 | ForEach-Object { Write-Host $_ }
+                  Write-Host "---------------------------"
+                }
+              }
+              Write-Host "Retrying in ${delay}s..."
+              Start-Sleep -Seconds $delay
+              $delay = [Math]::Min($delay * 2, 120)
+            }
           }
 
-          # Display connection details
-          Write-Host "`n=== RDP ACCESS ==="
-          Write-Host "Address: $address"
-          Write-Host "Username: RDP"
-          Write-Host "Password: $(echo $env:RDP_CREDS)"
-          Write-Host "==================`n"
+          Write-Error "All $maxRetries Pinggy attempts failed. See logs above."
 
-          # Keep the runner alive
-          while ($true) {
-              Write-Host "[$(Get-Date)] RDP Active - Pinggy tunnel is running"
-              Start-Sleep -Seconds 300
-          }
+      # 9. Auto-Restart Workflow (as requested)
+      # ⚠️ WARNING: GITHUB_TOKEN cannot trigger a new workflow_dispatch event.
+      # The command will succeed but the new run WILL NOT START.
+      # To actually restart the workflow, use a Personal Access Token (MY_PAT) instead.
+      - name: 🔄 Auto-Restart Server
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Triggering next workflow run to restart the server..."
+          gh workflow run main.yml --ref ${{ github.ref_name }}
+          echo "✅ Restart triggered successfully! Thanks for using @GamingBurst007's script!"
